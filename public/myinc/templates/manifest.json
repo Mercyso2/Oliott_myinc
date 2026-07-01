@@ -1,0 +1,138 @@
+[
+  {
+    "file": "01_feed_institucional_claro.png",
+    "name": "Feed institucional premium claro",
+    "template_kind": "feed",
+    "format": "1080x1350",
+    "notes": "Template de feed institucional com arquitetura premium, copy forte à esquerda, imagem hero à direita, logo e assinatura MYINC.",
+    "tags": [
+      "MYINC",
+      "template",
+      "tema-claro",
+      "premium",
+      "arquitetura",
+      "construcao-civil",
+      "feed"
+    ],
+    "usage_rule": "Usar como referência visual/template premium MYINC. Manter fundo claro, respiro, tipografia moderna, destaque laranja/cobre e composição editorial limpa."
+  },
+  {
+    "file": "02_carrossel_capa_imovel_na_planta.png",
+    "name": "Carrossel capa imóvel na planta",
+    "template_kind": "carrossel_capa",
+    "format": "1080x1350",
+    "notes": "Template de capa de carrossel educativo com número forte, headline grande, fundo claro e render arquitetônico lateral.",
+    "tags": [
+      "MYINC",
+      "template",
+      "tema-claro",
+      "premium",
+      "arquitetura",
+      "construcao-civil",
+      "carrossel-capa"
+    ],
+    "usage_rule": "Usar como referência visual/template premium MYINC. Manter fundo claro, respiro, tipografia moderna, destaque laranja/cobre e composição editorial limpa."
+  },
+  {
+    "file": "03_carrossel_interno_localizacao.png",
+    "name": "Carrossel interno localização e mobilidade",
+    "template_kind": "carrossel_interno",
+    "format": "1080x1350",
+    "notes": "Template interno de carrossel com numeração, bloco de texto limpo e foto urbana em coluna lateral.",
+    "tags": [
+      "MYINC",
+      "template",
+      "tema-claro",
+      "premium",
+      "arquitetura",
+      "construcao-civil",
+      "carrossel-interno"
+    ],
+    "usage_rule": "Usar como referência visual/template premium MYINC. Manter fundo claro, respiro, tipografia moderna, destaque laranja/cobre e composição editorial limpa."
+  },
+  {
+    "file": "04_carrossel_cta_final_claro.png",
+    "name": "Carrossel final CTA claro",
+    "template_kind": "carrossel_cta",
+    "format": "1080x1350",
+    "notes": "Template de fechamento/CTA com frase de impacto, ambiente claro e chamada consultiva.",
+    "tags": [
+      "MYINC",
+      "template",
+      "tema-claro",
+      "premium",
+      "arquitetura",
+      "construcao-civil",
+      "carrossel-cta"
+    ],
+    "usage_rule": "Usar como referência visual/template premium MYINC. Manter fundo claro, respiro, tipografia moderna, destaque laranja/cobre e composição editorial limpa."
+  },
+  {
+    "file": "05_reels_capa_impermeabilizacao.png",
+    "name": "Reels capa impermeabilização",
+    "template_kind": "reels_capa",
+    "format": "1080x1920",
+    "notes": "Template de capa vertical para Reels educativo, fundo claro, etiqueta Reels, headline forte e imagem residencial clara.",
+    "tags": [
+      "MYINC",
+      "template",
+      "tema-claro",
+      "premium",
+      "arquitetura",
+      "construcao-civil",
+      "reels-capa"
+    ],
+    "usage_rule": "Usar como referência visual/template premium MYINC. Manter fundo claro, respiro, tipografia moderna, destaque laranja/cobre e composição editorial limpa."
+  },
+  {
+    "file": "06_reels_quadro_educativo.png",
+    "name": "Reels quadro educativo impermeabilização",
+    "template_kind": "reels_quadro",
+    "format": "1080x1920",
+    "notes": "Template vertical educativo com selo Dica MYINC, texto didático e imagem técnica de construção/acabamento.",
+    "tags": [
+      "MYINC",
+      "template",
+      "tema-claro",
+      "premium",
+      "arquitetura",
+      "construcao-civil",
+      "reels-quadro"
+    ],
+    "usage_rule": "Usar como referência visual/template premium MYINC. Manter fundo claro, respiro, tipografia moderna, destaque laranja/cobre e composição editorial limpa."
+  },
+  {
+    "file": "07_feed_antes_depois.png",
+    "name": "Feed antes e depois obra",
+    "template_kind": "feed_antes_depois",
+    "format": "1080x1350",
+    "notes": "Template antes/depois com duas imagens, etiquetas, texto de apoio e assinatura MYINC.",
+    "tags": [
+      "MYINC",
+      "template",
+      "tema-claro",
+      "premium",
+      "arquitetura",
+      "construcao-civil",
+      "feed-antes-depois"
+    ],
+    "usage_rule": "Usar como referência visual/template premium MYINC. Manter fundo claro, respiro, tipografia moderna, destaque laranja/cobre e composição editorial limpa."
+  },
+  {
+    "file": "08_feed_depoimento.png",
+    "name": "Feed depoimento premium",
+    "template_kind": "feed_depoimento",
+    "format": "1080x1350",
+    "notes": "Template de depoimento/prova social com card translúcido, estrelas, ambiente premium claro e assinatura MYINC.",
+    "tags": [
+      "MYINC",
+      "template",
+      "tema-claro",
+      "premium",
+      "arquitetura",
+      "construcao-civil",
+      "feed-depoimento"
+    ],
+    "usage_rule": "Usar como referência visual/template premium MYINC. Manter fundo claro, respiro, tipografia moderna, destaque laranja/cobre e composição editorial limpa."
+  }
+]

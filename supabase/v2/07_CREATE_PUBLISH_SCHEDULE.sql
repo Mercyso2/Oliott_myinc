@@ -1,0 +1,16 @@
+-- V2 07 - Agendamento leve de publicação. Configure PUBLISH_CRON_SECRET em Edge Secrets.
+-- Ajuste PROJECT_REF antes de usar no Supabase hospedado.
+-- Alternativa: use Vercel Cron chamando publish-scheduled-posts.
+
+-- Exemplo seguro usando pg_cron + pg_net. Troque a URL e o token.
+-- select cron.schedule(
+--   'myinc-publish-scheduled-posts-v2',
+--   '*/5 * * * *',
+--   $$
+--   select net.http_post(
+--     url := 'https://PROJECT_REF.functions.supabase.co/publish-scheduled-posts',
+--     headers := jsonb_build_object('Content-Type','application/json','x-cron-secret','COLE_AQUI_O_PUBLISH_CRON_SECRET'),
+--     body := jsonb_build_object('source','pg_cron')
+--   );
+--   $$
+-- );

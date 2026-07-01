@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-desktop
+.myinc-engine
+supabase/.temp
+supabase/.temp
+.env
+.env.local
+.env.engine
+.env.production
+*.log
+*.tmp
+*.bak
+coverage
+

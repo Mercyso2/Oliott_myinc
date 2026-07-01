@@ -1,0 +1,39 @@
+{
+  "brand_memory": {
+    "company": "MYINC",
+    "site": "https://myinc.com.br",
+    "tagline_spirit": "Mais Próximos de Você",
+    "positioning": "Incorporadora e construtora premium",
+    "instagram_goal": "conteúdo educativo e premium sobre construção civil, leis, dúvidas, ideias, curiosidades e mercado imobiliário",
+    "visual_must": [
+      "fundo claro",
+      "luz natural",
+      "composição limpa",
+      "visual premium",
+      "arquitetura contemporânea"
+    ],
+    "visual_never": [
+      "fundo escuro",
+      "poluição visual",
+      "panfleto",
+      "estética amadora"
+    ],
+    "audience": [
+      "famílias",
+      "investidores",
+      "compradores exigentes",
+      "proprietários de terreno",
+      "arquitetos e parceiros"
+    ],
+    "editorial_pillars": [
+      "construção civil",
+      "legislação e normas",
+      "dúvidas frequentes",
+      "curiosidades do setor",
+      "arquitetura e design",
+      "obra e bastidores",
+      "compra inteligente",
+      "institucional e prova social"
+    ]
+  }
+}

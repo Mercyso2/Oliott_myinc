@@ -1,7 +1,14 @@
 {
-  "framework": null,
+  "framework": "vite",
   "installCommand": "npm install --legacy-peer-deps",
-  "buildCommand": "NITRO_PRESET=vercel npm run build",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist/client",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",

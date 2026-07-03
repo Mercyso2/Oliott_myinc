@@ -90,8 +90,12 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <LogOut className="h-4 w-4" />
             Sair
           </Button>
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-primary text-sm font-bold text-primary-foreground">
-            R
+          <div
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-primary text-sm font-bold text-primary-foreground"
+            title="Mauricio"
+            aria-label="Perfil de Mauricio"
+          >
+            M
           </div>
         </header>
 

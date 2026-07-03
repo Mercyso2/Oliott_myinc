@@ -34,7 +34,7 @@
     "web:dev": "vite dev",
     "web:build": "vite build",
     "engine:dev": "node engine/runtime/main-loop.mjs",
-    "engine:check": "node --check engine/runtime/main-loop.mjs && node --check engine/processors/job-processor.mjs && node --check engine/renderers/design-renderer-v2.mjs && node --check engine/openai/openai-client.mjs",
+    "engine:check": "node --check engine/runtime/main-loop.mjs && node --check engine/processors/job-processor.mjs && node --check engine/renderers/design-renderer-v2.mjs && node --check engine/openai/openai-client.mjs && node --check engine/quality/quality-checker.mjs",
     "test:v2": "node tests/v2-frontend-base-restored.test.mjs && node tests/v2-no-heavy-vercel-worker.test.mjs && node tests/v2-no-simplified-frontend.test.mjs && node tests/v2-edge-contract.test.mjs && node tests/v2-engine-contract.test.mjs && node tests/v2-sql-contract.test.mjs && node tests/v2-no-secret-leak.test.mjs && node --check engine/runtime/main-loop.mjs",
     "v2:verify": "npm run typecheck && npm run build && npm run test:v2",
     "desktop:v2:dev": "npm run build && electron .",

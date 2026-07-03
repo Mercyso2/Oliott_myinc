@@ -292,7 +292,7 @@ O que foi garantido nesta revisão:
 - [ ] Rodar SQL 00 antes de qualquer reset.
 - [ ] Confirmar que `runtime_secrets` foi preservada se existir.
 - [ ] Aplicar SQL 01 a 07 na ordem.
-- [ ] Criar usuário Rodrigo no Supabase Auth com o mesmo e-mail da seed.
+- [ ] Criar usuário Mauricio no Supabase Auth com o mesmo e-mail da seed.
 - [ ] Configurar Vercel com apenas variáveis públicas.
 - [ ] Deploy Edge Functions.
 - [ ] Configurar Edge Secrets.

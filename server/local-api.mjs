@@ -130,7 +130,7 @@ function defaultDb() {
     id: userId,
     auth_user_id: "local-admin-user",
     email: (process.env.LOCAL_ADMIN_EMAIL || "rodrigocarvalhosantos@hotmail.com").toLowerCase(),
-    full_name: process.env.LOCAL_ADMIN_NAME || "Rodrigo Carvalho Santos",
+    full_name: process.env.LOCAL_ADMIN_NAME || "Mauricio",
     role: "admin",
     brand_id: brandId,
     status: "active",
@@ -637,104 +637,80 @@ function distributeFormats(formats) {
     : ["Feed 1080x1350", "Story 1080x1920", "Reels 1080x1920", "Carrossel 5 páginas"];
 }
 
-function generateIdeasPayload(payload, monthlyPlan) {
+// Gera ideias reais chamando a IA com o contexto de marca do Cérebro IA local.
+// Sem template fixo: se a IA falhar ou não retornar ideias, o erro sobe
+// intacto e nenhum plano é salvo — conteúdo artificial é proibido.
+async function generateIdeasWithAI(db, payload, brandIdForContext) {
   const total = Math.max(1, Math.min(120, Number(payload.totalPosts || 30)));
   const formats = distributeFormats(payload.formats);
   const channels =
     Array.isArray(payload.channels) && payload.channels.length
       ? payload.channels
       : ["Instagram", "Facebook"];
-  const pillars = String(
-    payload.pillars ||
-      "Venda, Autoridade, Relacionamento, Institucional, Obra, Lifestyle, Prova social",
-  )
-    .split(/[,\n]/)
-    .map((x) => x.trim())
-    .filter(Boolean);
-  const hooks = [
-    "Arquitetura que transforma a rotina",
-    "Localização estratégica para viver melhor",
-    "Detalhes que revelam alto padrão",
-    "Qualidade construtiva percebida em cada escolha",
-    "Design funcional para uma vida mais leve",
-    "O valor de investir em um imóvel bem pensado",
-    "Bastidores de uma incorporadora premium",
-    "Confiança para decidir seu próximo imóvel",
-    "Ambientes que unem sofisticação e praticidade",
-    "MYINC e o novo olhar para morar bem",
-  ];
-  const ideas = [];
-  const start = new Date(
-    Number(payload.year || new Date().getFullYear()),
-    Number(payload.month || new Date().getMonth() + 1) - 1,
-    1,
-    9,
-    0,
-    0,
-  );
-  for (let i = 0; i < total; i++) {
-    const pillar = pillars[i % pillars.length] || "Institucional";
-    const format = formats[i % formats.length] || "Feed 1080x1350";
-    const channel = channels[i % channels.length] || "Instagram";
-    const hook = hooks[i % hooks.length];
-    const scheduled = addDays(start, i);
-    scheduled.setHours(9 + (i % 4) * 3, 0, 0, 0);
-    ideas.push({
-      id: uuid(),
-      monthly_plan_id: monthlyPlan.id,
-      brand_id: monthlyPlan.brand_id,
-      suggested_at: scheduled.toISOString(),
-      channel: String(channel).includes("Facebook")
-        ? "Facebook"
-        : String(channel).includes("Ambos")
-          ? "Ambos"
-          : "Instagram",
-      format,
-      theme: `${pillar}: ${hook}`,
-      objective:
-        payload.monthlyObjective || "Gerar autoridade, desejo e leads qualificados para a MYINC.",
-      headline: hook,
-      short_text: `Conteúdo premium sobre ${pillar.toLowerCase()} conectando arquitetura, confiança e qualidade de vida ao universo MYINC.`,
-      cta: "Fale com a equipe MYINC e conheça o empreendimento ideal para você.",
-      visual_idea: `Visual sofisticado de incorporadora premium: arquitetura contemporânea, luz natural, composição limpa, tons grafite/off-white/laranja-cobre e pouco texto. Formato: ${format}.`,
-      initial_prompt: `Criar arte ${format} para MYINC sobre ${hook}. Estilo premium, arquitetura, sofisticação, materiais nobres, sem poluição visual, sem texto excessivo.`,
-      predicted_score: 88 + (i % 9),
-      status: "rascunho",
-      archived_at: null,
-      deleted_at: null,
-      created_at: now(),
-      updated_at: now(),
-    });
-  }
-  return ideas;
+  const context = buildBrainContext(db, brandIdForContext);
+  const formatSequence = Array.from({ length: total }, (_, i) => formats[i % formats.length] || "Feed 1080x1350");
+  const channelSequence = Array.from({ length: total }, (_, i) => channels[i % channels.length] || "Instagram");
+
+  const system = [
+    "Você é o estrategista-chefe de conteúdo da MYINC, especializado em incorporadoras premium, arquitetura, engenharia e vendas consultivas.",
+    "Crie ideias com profundidade estratégica, linguagem sofisticada e visão de campanha real; nunca genéricas ou repetitivas entre si.",
+    "Responda somente JSON válido com as chaves strategy (string) e ideas (array).",
+  ].join("\n");
+  const userPrompt = JSON.stringify({
+    task: "monthly_plan_local",
+    context: context.text,
+    exact_total: total,
+    format_sequence: formatSequence,
+    channel_sequence: channelSequence,
+    monthly_objective: payload.monthlyObjective || payload.objective || "Autoridade e conversão consultiva",
+    pillars: payload.pillars,
+    campaign: payload.campaign,
+    required_schema: {
+      strategy: "string",
+      ideas: [{
+        theme: "string", headline: "string", hook: "string", angle: "string",
+        pain_point: "string", objective: "string", short_text: "string",
+        cta: "string", visual_idea: "string", initial_prompt: "string", why_this_post_matters: "string",
+        content_pillar: "string", channel: "Instagram|Facebook|Ambos", format: "string", predicted_score: 90,
+      }],
+    },
+  });
+
+  const ai = await askOpenAIJson(system, userPrompt);
+  const rawIdeas = Array.isArray(ai.ideas) ? ai.ideas : [];
+  return { ai, rawIdeas, total, formatSequence, channelSequence };
 }
 
-async function askOpenAIText(system, user, fallback) {
+// Sem fallback fabricado: conteúdo artificial é proibido. IA ausente/falhando
+// deve gerar um erro real, nunca um objeto de template disfarçado de IA.
+async function askOpenAIJson(system, user) {
   const key = process.env.OPENAI_API_KEY;
-  if (!key) return fallback;
+  if (!key) {
+    throw new Error(
+      "OPENAI_API_KEY ausente. Conteúdo artificial é proibido — configure a chave para gerar com IA real.",
+    );
+  }
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: process.env.OPENAI_TEXT_MODEL || "gpt-5.2",
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      temperature: 0.7,
+      response_format: { type: "json_object" },
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error?.message || "OpenAI texto falhou.");
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("OpenAI não retornou conteúdo.");
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: process.env.OPENAI_TEXT_MODEL || "gpt-5.2",
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        temperature: 0.7,
-        response_format: { type: "json_object" },
-      }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data?.error?.message || "OpenAI texto falhou");
-    const content = data?.choices?.[0]?.message?.content;
-    return content ? JSON.parse(content) : fallback;
+    return JSON.parse(content);
   } catch (error) {
-    return {
-      ...fallback,
-      ai_warning: error instanceof Error ? error.message : "OpenAI indisponível",
-    };
+    throw new Error(`JSON inválido retornado pela IA: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -795,7 +771,9 @@ function truthyEnv(name, defaultValue = false) {
 }
 
 function strictAiMode() {
-  return truthyEnv("AI_STRICT_MODE", false) || truthyEnv("PRODUCTION_MEDIA_STRICT", false);
+  // Estrito por padrão: imagem é IA real ou o job falha. Placeholder SVG só
+  // com AI_STRICT_MODE=false explícito (prévia local, nunca produção).
+  return truthyEnv("AI_STRICT_MODE", true) || truthyEnv("PRODUCTION_MEDIA_STRICT", false);
 }
 
 function isValidPublicHttps(url) {
@@ -1362,85 +1340,50 @@ function fallbackCarouselPages(post, count) {
   }));
 }
 
-function fallbackVideoScript(post) {
-  return {
-    hook_3s: post.headline || "Um novo olhar para morar bem.",
-    scenes: [
-      "Cena 1: fachada/render premium com luz natural e movimento suave.",
-      "Cena 2: detalhes de arquitetura, materiais nobres e lifestyle elegante.",
-      "Cena 3: localização, confiança e chamada para atendimento MYINC.",
-    ],
-    narration:
-      "A MYINC une arquitetura, sofisticação e funcionalidade para transformar a experiência de viver e investir.",
-    screen_text: ["Arquitetura premium", "Qualidade de vida", "Fale com a MYINC"],
-    cta: post.cta || "Fale com a equipe MYINC.",
-  };
-}
 
-function fallbackStorySequence(post) {
-  return [
-    { screen: 1, text: post.headline || post.title, cta: "Toque para conhecer" },
-    { screen: 2, text: "Arquitetura, localização e qualidade em cada detalhe.", cta: "Saiba mais" },
-    { screen: 3, text: post.cta || "Fale com a MYINC", cta: "Chamar no WhatsApp" },
-  ];
-}
-
-function buildPostFallback(post, context, instruction = "") {
-  const hashtags = ["#MYINC", "#Incorporadora", "#Arquitetura", "#AltoPadrao", "#Imoveis"];
+// Sem fallback fabricado: exige os campos reais que a IA retornou. Se algo
+// obrigatório faltar, o chamador deve tratar como falha (post fica com erro
+// honesto), nunca preencher com texto de template disfarçado de IA.
+function normalizePostGenerationResult(post, result) {
   const count = carouselPageCount(post.format);
-  const fallback = {
-    headline: post.headline || post.title,
-    caption: `${post.headline || post.title}\n\nA MYINC une arquitetura, sofisticação e funcionalidade para transformar a forma de viver e investir. Cada detalhe comunica qualidade, confiança e alto padrão.\n\n${post.cta || "Fale com a equipe MYINC e conheça melhor."}`,
-    hashtags,
-    cta: post.cta || "Fale com a equipe MYINC.",
-    image_prompt:
-      post.image_prompt ||
-      `Criativo premium para ${post.title}, arquitetura contemporânea, luz natural, grafite/off-white/laranja-cobre, pouco texto, estética de agência.`,
-    creative_brief:
-      post.creative_brief ||
-      "Arte premium com composição limpa, foto/render arquitetônico, poucos elementos, elegância e CTA claro.",
-    master_prompt: context.text,
-    quality_score: 94,
-    carousel_pages: isCarouselFormat(post.format) ? fallbackCarouselPages(post, count) : [],
-    video_script: isVideoFormat(post.format) ? fallbackVideoScript(post) : null,
-    story_sequence: isStoryFormat(post.format) ? fallbackStorySequence(post) : [],
-    ai_notes: instruction || "Produção local com Cérebro IA MYINC.",
-  };
-  return fallback;
-}
-
-function normalizePostGenerationResult(post, result, fallback) {
-  const count = carouselPageCount(post.format);
-  const carouselPages =
-    Array.isArray(result.carousel_pages) && result.carousel_pages.length
-      ? result.carousel_pages.slice(0, count).map((page, index) => ({
-          page: Number(page.page || index + 1),
-          title: page.title || fallbackCarouselPages(post, count)[index]?.title,
-          text: page.text || fallbackCarouselPages(post, count)[index]?.text,
-          visual_prompt:
-            page.visual_prompt || fallbackCarouselPages(post, count)[index]?.visual_prompt,
-        }))
-      : fallback.carousel_pages;
-
-  while (isCarouselFormat(post.format) && carouselPages.length < count) {
-    carouselPages.push(fallbackCarouselPages(post, count)[carouselPages.length]);
+  const headline = String(result.headline || "").trim();
+  const caption = String(result.caption || "").trim();
+  const cta = String(result.cta || "").trim();
+  const imagePrompt = String(result.image_prompt || "").trim();
+  if (!headline || !caption || !cta || !imagePrompt) {
+    throw new Error(
+      "A IA retornou conteúdo incompleto (faltou headline, caption, cta ou image_prompt). Nada foi salvo.",
+    );
+  }
+  if (isCarouselFormat(post.format)) {
+    const pages = Array.isArray(result.carousel_pages) ? result.carousel_pages : [];
+    if (pages.length < 2) {
+      throw new Error("A IA não retornou carousel_pages suficientes para o carrossel. Nada foi salvo.");
+    }
+  }
+  if (isVideoFormat(post.format)) {
+    const scenes = result.video_script && Array.isArray(result.video_script.scenes) ? result.video_script.scenes : [];
+    if (!scenes.length) {
+      throw new Error("A IA não retornou video_script com cenas para o Reels/Vídeo. Nada foi salvo.");
+    }
+  }
+  if (isStoryFormat(post.format) && (!Array.isArray(result.story_sequence) || !result.story_sequence.length)) {
+    throw new Error("A IA não retornou story_sequence para o Story. Nada foi salvo.");
   }
 
   return {
-    headline: result.headline || fallback.headline,
-    caption: result.caption || fallback.caption,
-    hashtags: normalizeHashtags(result.hashtags, fallback.hashtags),
-    cta: result.cta || fallback.cta,
-    image_prompt: result.image_prompt || fallback.image_prompt,
-    creative_brief: result.creative_brief || fallback.creative_brief,
-    quality_score: Number(result.quality_score || fallback.quality_score),
-    master_prompt: result.master_prompt || fallback.master_prompt,
-    carousel_pages: isCarouselFormat(post.format) ? carouselPages : [],
-    video_script: isVideoFormat(post.format) ? result.video_script || fallback.video_script : null,
-    story_sequence: isStoryFormat(post.format)
-      ? result.story_sequence || fallback.story_sequence
-      : [],
-    ai_warning: result.ai_warning,
+    headline,
+    caption,
+    hashtags: normalizeHashtags(result.hashtags, []),
+    cta,
+    image_prompt: imagePrompt,
+    creative_brief: String(result.creative_brief || "").trim() || imagePrompt,
+    // Score honesto: só o que a IA declarou; ausente vira null, nunca um piso inventado.
+    quality_score: Number(result.quality_score) || null,
+    master_prompt: result.master_prompt || null,
+    carousel_pages: isCarouselFormat(post.format) ? result.carousel_pages.slice(0, count) : [],
+    video_script: isVideoFormat(post.format) ? result.video_script : null,
+    story_sequence: isStoryFormat(post.format) ? result.story_sequence : [],
   };
 }
 
@@ -1455,10 +1398,10 @@ async function generateMediaForPost(db, post, options = {}) {
   const urls = [];
 
   if (isCarouselFormat(post.format)) {
-    const pages =
-      Array.isArray(output.carousel_pages) && output.carousel_pages.length
-        ? output.carousel_pages
-        : fallbackCarouselPages(post, carouselPageCount(post.format));
+    const pages = Array.isArray(output.carousel_pages) ? output.carousel_pages : [];
+    if (!pages.length) {
+      throw new Error("Post sem carousel_pages gerados pela IA. Gere o conteúdo antes de criar as imagens.");
+    }
     for (const page of pages.slice(0, carouselPageCount(post.format))) {
       const prompt = `${page.visual_prompt || post.image_prompt}\n\nFormato: página ${page.page} de carrossel MYINC. Texto curto sugerido: ${page.title || "MYINC"}. Não gerar texto distorcido. Composição premium, limpa, alto padrão.`;
       const url = await generateImage(db, post, prompt, `p${page.page || urls.length + 1}`);
@@ -1489,11 +1432,11 @@ async function generateMediaForPost(db, post, options = {}) {
     post.carousel_media_urls = urls;
     if (version?.output_json) version.output_json.carousel_media_urls = urls;
   } else if (isVideoFormat(post.format)) {
-    const script = output.video_script || fallbackVideoScript(post);
-    const scenes =
-      Array.isArray(script.scenes) && script.scenes.length
-        ? script.scenes
-        : fallbackVideoScript(post).scenes;
+    const script = output.video_script;
+    const scenes = script && Array.isArray(script.scenes) ? script.scenes : [];
+    if (!scenes.length) {
+      throw new Error("Post sem video_script gerado pela IA. Gere o conteúdo antes de criar o vídeo.");
+    }
     const storyboardUrls = [];
     const posterPrompt = `${post.image_prompt || post.creative_brief}
 
@@ -1855,7 +1798,7 @@ function convertApprovedIdeasToPosts(db, brandId) {
       creative_brief: idea.visual_idea,
       media_url: null,
       carousel_media_urls: [],
-      quality_score: idea.predicted_score || 0,
+      quality_score: Number(idea.predicted_score) || null,
       status: "tema_aprovado",
       archived_at: null,
       deleted_at: null,
@@ -1955,20 +1898,52 @@ async function handleFunction(name, payload, db, req) {
     if (payload.mode === "regenerate_idea" && payload.ideaId) {
       const idea = db.post_ideas.find((x) => x.id === payload.ideaId);
       if (!idea) throw new Error("Ideia não encontrada.");
-      idea.headline = `${idea.headline || idea.theme} — versão refinada`;
-      idea.short_text =
-        "Versão ajustada com foco em sofisticação, clareza e conversão para a MYINC.";
-      idea.regenerate_count = Number(idea.regenerate_count || 0) + 1;
-      idea.updated_at = now();
+      const context = buildBrainContext(db, idea.brand_id || brandId);
+      const system = [
+        "Você é o Cérebro IA MYINC. Gere uma única ideia nova, mais forte, mais estratégica e mais premium que a atual.",
+        "Responda somente JSON válido com um objeto idea contendo: theme, headline, hook, angle, pain_point, objective, short_text, cta, visual_idea, initial_prompt, why_this_post_matters, content_pillar, predicted_score.",
+      ].join("\n");
+      const userPrompt = JSON.stringify({
+        context: context.text,
+        current_idea: idea,
+        instruction: payload.instruction || "melhorar de forma marcante e mais profissional",
+      });
+      // Sem fallback fabricado: se a IA falhar, o erro sobe e a ideia não é alterada.
+      const raw = await askOpenAIJson(system, userPrompt);
+      const next = raw.idea || raw;
+      const headline = String(next.headline || next.theme || "").trim();
+      if (!headline) throw new Error("A IA não retornou uma ideia válida para regenerar.");
+      Object.assign(idea, {
+        theme: String(next.theme || idea.theme),
+        headline,
+        short_text: String(next.short_text || idea.short_text || ""),
+        cta: String(next.cta || idea.cta || ""),
+        visual_idea: String(next.visual_idea || next.visual_direction || idea.visual_idea || ""),
+        initial_prompt: String(next.initial_prompt || idea.initial_prompt || ""),
+        objective: String(next.objective || idea.objective || ""),
+        content_pillar: String(next.content_pillar || idea.content_pillar || ""),
+        why_this_post_matters: String(next.why_this_post_matters || idea.why_this_post_matters || ""),
+        predicted_score: Number(next.predicted_score) || null,
+        regenerate_count: Number(idea.regenerate_count || 0) + 1,
+        updated_at: now(),
+      });
       log(db, {
         brand_id: idea.brand_id,
         module: "planejamento",
         status: "sucesso",
-        friendly_message: "Ideia regenerada no modo local.",
+        friendly_message: "Ideia regenerada com IA real.",
         post_id: idea.converted_post_id || null,
       });
       return { ok: true, idea };
     }
+
+    // Sem fallback fabricado: se a IA falhar ou não retornar ideias, o erro
+    // sobe e nenhum plano é salvo.
+    const { ai, rawIdeas, total, formatSequence, channelSequence } = await generateIdeasWithAI(db, payload, brandId);
+    if (!rawIdeas.length) {
+      throw new Error("A IA não retornou nenhuma ideia válida. Nenhum plano foi salvo — tente gerar novamente.");
+    }
+
     const monthlyPlan = {
       id: uuid(),
       brand_id: brandId,
@@ -1977,32 +1952,85 @@ async function handleFunction(name, payload, db, req) {
       year: Number(payload.year || new Date().getFullYear()),
       objective:
         payload.monthlyObjective || payload.objective || "Gerar autoridade e leads qualificados.",
-      total_posts: Number(payload.totalPosts || 30),
+      total_posts: 0,
       channels: payload.channels || [],
       formats_distribution: payload.formats || {},
       campaign_distribution: {},
       plan_brief: payload,
+      strategy: ai.strategy || null,
       status: "generated",
       archived_at: null,
       created_at: now(),
       updated_at: now(),
     };
+
+    const start = new Date(
+      Number(payload.year || new Date().getFullYear()),
+      Number(payload.month || new Date().getMonth() + 1) - 1,
+      1,
+      9,
+      0,
+      0,
+    );
+    const ideas = [];
+    for (let i = 0; i < Math.min(total, rawIdeas.length); i++) {
+      const raw = rawIdeas[i] || {};
+      const headline = String(raw.headline || raw.theme || "").trim();
+      if (!headline) continue; // ideia malformada da IA: pulada, não fabricada
+      const scheduled = addDays(start, i);
+      scheduled.setHours(9 + (i % 4) * 3, 0, 0, 0);
+      const channel = String(raw.channel || channelSequence[i] || "Instagram");
+      ideas.push({
+        id: uuid(),
+        monthly_plan_id: monthlyPlan.id,
+        brand_id: brandId,
+        suggested_at: scheduled.toISOString(),
+        channel: channel.includes("Facebook") ? "Facebook" : channel.includes("Ambos") ? "Ambos" : "Instagram",
+        format: String(raw.format || formatSequence[i] || "Feed 1080x1350"),
+        theme: String(raw.theme || headline),
+        objective: String(raw.objective || monthlyPlan.objective),
+        headline,
+        short_text: String(raw.short_text || ""),
+        cta: String(raw.cta || ""),
+        visual_idea: String(raw.visual_idea || raw.visual_direction || ""),
+        initial_prompt: String(raw.initial_prompt || ""),
+        content_pillar: String(raw.content_pillar || ""),
+        why_this_post_matters: String(raw.why_this_post_matters || ""),
+        predicted_score: Number(raw.predicted_score) || null,
+        status: "rascunho",
+        archived_at: null,
+        deleted_at: null,
+        created_at: now(),
+        updated_at: now(),
+      });
+    }
+    if (!ideas.length) {
+      throw new Error("A IA retornou ideias incompletas (sem headline/theme). Nenhum plano foi salvo — tente novamente.");
+    }
+    monthlyPlan.total_posts = ideas.length;
     db.monthly_plans.push(monthlyPlan);
-    const ideas = generateIdeasPayload(payload, monthlyPlan);
     db.post_ideas.push(...ideas);
     log(db, {
       brand_id: brandId,
       module: "planejamento",
       status: "sucesso",
-      friendly_message: `${ideas.length} ideias geradas no modo local.`,
+      friendly_message: `${ideas.length} ideia(s) reais geradas pela IA.`,
     });
-    return { ok: true, monthlyPlan, ideas };
+    return {
+      ok: true,
+      monthlyPlan,
+      ideas,
+      message: ideas.length < total
+        ? `A IA gerou ${ideas.length} de ${total} ideia(s) solicitadas — todas reais, nenhuma preenchida artificialmente.`
+        : `Geradas ${ideas.length} ideia(s) reais pela IA.`,
+    };
   }
 
   if (name === "process-production-queue") {
     const batchId = payload.batchId || uuid();
     const postIds = payload.postIds || [];
     let processed = 0;
+    let failed = 0;
     for (const postId of postIds) {
       const post = db.posts.find((p) => p.id === postId);
       if (!post) continue;
@@ -2011,14 +2039,12 @@ async function handleFunction(name, payload, db, req) {
       post.updated_at = now();
 
       const context = buildBrainContext(db, post.brand_id || brandId);
-      const fallback = buildPostFallback(post, context, payload.instruction || "");
       const system = [
         "Você é o Cérebro IA local da MYINC.",
         "Aja como estrategista de social media, copywriter, diretor de arte, roteirista e revisor de qualidade.",
         "Use obrigatoriamente a memória da marca, regras ativas do Cérebro IA e referências aprovadas.",
         "Responda somente JSON válido.",
-        "Campos obrigatórios: headline, caption, hashtags, cta, image_prompt, creative_brief, quality_score, master_prompt.",
-        "Inclua quality_review com copy_score, visual_score, brand_score, cta_score, problems e suggestions.",
+        "Campos obrigatórios: headline, caption, hashtags, cta, image_prompt, creative_brief, quality_score.",
         "Se quality_score ficar abaixo de 88, melhore automaticamente antes de responder.",
         "Se for carrossel, inclua carousel_pages com page, title, text e visual_prompt para cada página.",
         "Se for Reels/vídeo, inclua video_script com hook_3s, scenes, narration, screen_text e cta.",
@@ -2032,8 +2058,29 @@ async function handleFunction(name, payload, db, req) {
         `INSTRUÇÃO HUMANA: ${payload.instruction || "Produzir versão premium definitiva."}`,
         "Nunca gere conteúdo genérico. A saída precisa parecer feita por uma agência premium especializada em incorporadoras.",
       ].join("\n\n");
-      const rawResult = await askOpenAIText(system, userPrompt, fallback);
-      const result = normalizePostGenerationResult(post, rawResult, fallback);
+
+      // Sem fallback fabricado: se a IA falhar ou faltar campo obrigatório,
+      // o post fica com erro honesto e o lote continua para os demais.
+      let result;
+      try {
+        const rawResult = await askOpenAIJson(system, userPrompt);
+        result = normalizePostGenerationResult(post, rawResult);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        post.status = "erro";
+        post.error_message = message;
+        post.updated_at = now();
+        log(db, {
+          brand_id: post.brand_id,
+          module: "production-queue",
+          status: "erro",
+          post_id: post.id,
+          friendly_message: "Falha ao gerar conteúdo real com IA; nada foi fabricado.",
+          technical_detail: message,
+        });
+        failed++;
+        continue;
+      }
 
       Object.assign(post, {
         headline: result.headline,
@@ -2062,7 +2109,7 @@ async function handleFunction(name, payload, db, req) {
             : isStoryFormat(post.format)
               ? "story"
               : "content",
-        generated_by: result.ai_warning ? "fallback-local" : "ai-local",
+        generated_by: "ai-local",
         caption: post.caption,
         hashtags: post.hashtags,
         cta: post.cta,
@@ -2109,10 +2156,10 @@ async function handleFunction(name, payload, db, req) {
     log(db, {
       brand_id: brandId,
       module: "production-queue",
-      status: "sucesso",
-      friendly_message: `${processed} posts processados com Cérebro IA local.`,
+      status: failed ? "alerta" : "sucesso",
+      friendly_message: `${processed} post(s) gerados com IA real${failed ? `; ${failed} falharam e ficaram com erro honesto (sem conteúdo fabricado)` : ""}.`,
     });
-    return { ok: true, batchId, queued: postIds.length, processed };
+    return { ok: true, batchId, queued: postIds.length, processed, failed };
   }
 
   if (name === "generate-post-content") {

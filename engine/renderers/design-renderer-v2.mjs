@@ -173,12 +173,12 @@ function inferContentPillar(payload = {}, type = 'image') {
   return 'editorial premium';
 }
 
-function layoutMode(payload = {}, type = 'image') {
+function layoutMode(payload = {}, type = 'image', sizeLabel = '') {
   const post = payload.post || {};
   const format = String(post.format || payload.format || '').toLowerCase();
-  if (type === 'carousel_page') return 'carousel';
+  if (sizeLabel === 'facebook-horizontal' || format.includes('facebook') || format.includes('1200x630')) return 'landscape';
   if (format.includes('story') || format.includes('reels')) return 'story';
-  if (format.includes('quadrado')) return 'square';
+  if (sizeLabel === 'feed-square' || format.includes('quadrado') || format.includes('1080x1080')) return 'square';
   return 'feed';
 }
 
@@ -196,27 +196,47 @@ function textContent(payload = {}, type = 'image') {
   return { headline, supporting, cta, page, pageCount: Number(payload.page_count || payload.total_pages || 1) || 1 };
 }
 
-function buildOverlaySvg({ width, height, payload, type, logoWhite, logoDark }) {
+// Especificação tipográfica por formato. O painel tem altura dinâmica pelo
+// texto real e é sempre posicionado acima da zona de CTA/logo (sem colisão).
+const LAYOUT_SPECS = {
+  story: { titleSize: 68, supportSize: 32, titleMax: 17, supportMax: 30, titleLines: 3, supportLines: 2, panelRatio: 0.82, desiredY: 0.52, logoW: 210, logoH: 86, headlineStart: 100 },
+  feed: { titleSize: 60, supportSize: 29, titleMax: 22, supportMax: 36, titleLines: 3, supportLines: 2, panelRatio: 0.76, desiredY: 0.55, logoW: 176, logoH: 72, headlineStart: 100 },
+  square: { titleSize: 54, supportSize: 27, titleMax: 19, supportMax: 34, titleLines: 2, supportLines: 2, panelRatio: 0.78, desiredY: 0.50, logoW: 160, logoH: 66, headlineStart: 100 },
+  landscape: { titleSize: 44, supportSize: 24, titleMax: 26, supportMax: 46, titleLines: 2, supportLines: 1, panelRatio: 0.62, desiredY: 0.24, logoW: 140, logoH: 58, headlineStart: 82 },
+};
+
+function buildOverlaySvg({ width, height, payload, type, logoWhite, logoDark, sizeLabel = '' }) {
   const palette = pickPalette(payload);
-  const mode = layoutMode(payload, type);
+  const mode = layoutMode(payload, type, sizeLabel);
+  const spec = LAYOUT_SPECS[mode] || LAYOUT_SPECS.feed;
   const pillar = inferContentPillar(payload, type).toUpperCase();
   const { headline, supporting, cta, page, pageCount } = textContent(payload, type);
   const safe = Math.round(width * 0.075);
-  const titleSize = mode === 'story' ? 68 : mode === 'square' ? 54 : 60;
-  const supportSize = mode === 'story' ? 32 : 29;
-  const titleMax = mode === 'story' ? 17 : mode === 'square' ? 19 : 22;
-  const supportMax = mode === 'story' ? 30 : 36;
-  const panelWidth = mode === 'story' ? Math.round(width * 0.82) : Math.round(width * 0.76);
-  const panelX = safe;
-  const panelY = mode === 'story' ? Math.round(height * 0.52) : mode === 'square' ? Math.round(height * 0.50) : Math.round(height * 0.57);
-  const headlineLines = wrapText(headline, titleMax, mode === 'story' ? 3 : 3);
-  const supportLines = wrapText(supporting, supportMax, mode === 'story' ? 2 : 2);
+
+  const titleLH = Math.round(spec.titleSize * 1.04);
+  const supportLH = Math.round(spec.supportSize * 1.28);
+  const headlineLines = wrapText(headline, spec.titleMax, spec.titleLines);
+  const supportLines = wrapText(supporting, spec.supportMax, spec.supportLines);
+
   const logo = logoDark || logoWhite;
-  const logoW = mode === 'story' ? 210 : 176;
-  const logoH = mode === 'story' ? 86 : 72;
-  const logoY = height - safe - logoH;
-  const ctaWidth = Math.min(width - safe * 2, Math.max(210, Math.min(360, cta.length * 13)));
-  const ctaLabel = cta.length > 28 ? `${cta.slice(0, 25).trim()}...` : cta;
+  const logoY = height - safe - spec.logoH;
+  const ctaTop = logoY - 64;
+
+  // Altura real do bloco de texto (kicker + headline + apoio, com descendente).
+  const contentBottomRel = spec.headlineStart + 14 + headlineLines.length * titleLH + 24
+    + (supportLines.length - 1) * supportLH + Math.round(spec.supportSize * 0.35);
+  const padTop = 46;
+  const padBottom = 14;
+  // Painel nunca invade a zona do CTA/logo; sobe o quanto for preciso.
+  const maxPanelY = ctaTop - 16 - padBottom - contentBottomRel;
+  const panelY = Math.max(safe + padTop, Math.min(Math.round(height * spec.desiredY), maxPanelY));
+  const panelWidth = Math.round(width * spec.panelRatio);
+  const panelX = safe;
+  const panelHeight = padTop + contentBottomRel + padBottom;
+
+  // ~15.5px por caractere em Montserrat 19px bold caixa-alta com letter-spacing 1.2.
+  const ctaLabel = cta.length > 26 ? `${cta.slice(0, 23).trim()}...` : cta;
+  const ctaWidth = Math.min(width - safe * 2, Math.max(180, 44 + Math.round(ctaLabel.length * 15.5)));
   const ctaText = escapeXml(ctaLabel.toUpperCase());
   const progress = type === 'carousel_page' && pageCount > 1
     ? `<text x="${width - safe}" y="${safe + 38}" font-family="Montserrat, Inter, Arial, sans-serif" font-size="24" font-weight="800" fill="${palette.graphite}" text-anchor="end">${page}/${pageCount}</text>`
@@ -235,17 +255,16 @@ function buildOverlaySvg({ width, height, payload, type, logoWhite, logoDark }) 
       </filter>
     </defs>
     <rect width="${width}" height="${height}" fill="url(#shade)"/>
-    <rect x="${safe * 0.55}" y="${safe * 0.55}" width="${width - safe * 1.1}" height="${height - safe * 1.1}" rx="0" fill="none" stroke="${palette.light}" stroke-opacity="0.0"/>
-    <rect x="${panelX - 18}" y="${panelY - 46}" width="${panelWidth + 36}" height="${Math.round(height * 0.27)}" rx="18" fill="${palette.paper}" opacity="0.92" filter="url(#shadow)"/>
+    <rect x="${panelX - 18}" y="${panelY - padTop}" width="${panelWidth + 36}" height="${panelHeight}" rx="18" fill="${palette.paper}" opacity="0.92" filter="url(#shadow)"/>
     <rect x="${panelX}" y="${panelY - 22}" width="${Math.min(230, Math.round(panelWidth * 0.34))}" height="7" rx="4" fill="${palette.accent}"/>
     <text x="${panelX}" y="${panelY + 30}" font-family="Montserrat, Inter, Arial, sans-serif" font-size="19" font-weight="800" letter-spacing="2.8" fill="${palette.accent}">${escapeXml(pillar)}</text>
-    ${svgTextLines(headlineLines, panelX, panelY + 100, Math.round(titleSize * 1.04), { size: titleSize, weight: 850, fill: palette.dark })}
-    ${svgTextLines(supportLines, panelX, panelY + 114 + headlineLines.length * Math.round(titleSize * 1.04) + 24, Math.round(supportSize * 1.28), { size: supportSize, weight: 500, fill: palette.graphite })}
-    <g transform="translate(${width - safe - ctaWidth}, ${logoY - 64})">
+    ${svgTextLines(headlineLines, panelX, panelY + spec.headlineStart, titleLH, { size: spec.titleSize, weight: 850, fill: palette.dark })}
+    ${svgTextLines(supportLines, panelX, panelY + spec.headlineStart + 14 + headlineLines.length * titleLH + 24, supportLH, { size: spec.supportSize, weight: 500, fill: palette.graphite })}
+    <g transform="translate(${width - safe - ctaWidth}, ${ctaTop})">
       <rect x="0" y="0" width="${ctaWidth}" height="46" rx="23" fill="${palette.accent}"/>
       <text x="22" y="30" font-family="Montserrat, Inter, Arial, sans-serif" font-size="19" font-weight="800" letter-spacing="1.2" fill="${palette.light}">${ctaText}</text>
     </g>
-    ${logo ? `<image href="${logo}" x="${safe}" y="${logoY}" width="${logoW}" height="${logoH}" preserveAspectRatio="xMinYMid meet" opacity="0.98"/>` : `<text x="${safe}" y="${height - safe}" font-family="Montserrat, Inter, Arial, sans-serif" font-size="34" font-weight="800" fill="${palette.dark}">MYINC</text>`}
+    ${logo ? `<image href="${logo}" x="${safe}" y="${logoY}" width="${spec.logoW}" height="${spec.logoH}" preserveAspectRatio="xMinYMid meet" opacity="0.98"/>` : `<text x="${safe}" y="${height - safe}" font-family="Montserrat, Inter, Arial, sans-serif" font-size="34" font-weight="800" fill="${palette.dark}">MYINC</text>`}
     ${progress}
   </svg>`;
 }
@@ -272,7 +291,7 @@ export async function renderFinalDesignV2({ baseArtifact, payload = {}, type = '
     .modulate({ saturation: 0.96, brightness: 0.94 })
     .png()
     .toBuffer();
-  const overlay = Buffer.from(buildOverlaySvg({ width: sizeInfo.width, height: sizeInfo.height, payload, type, logoWhite, logoDark }));
+  const overlay = Buffer.from(buildOverlaySvg({ width: sizeInfo.width, height: sizeInfo.height, payload, type, logoWhite, logoDark, sizeLabel: sizeInfo.label }));
   const output = await sharp(base)
     .composite([{ input: overlay, top: 0, left: 0 }])
     .png({ compressionLevel: 8, quality: 96 })
@@ -293,7 +312,7 @@ export async function renderFinalDesignV2({ baseArtifact, payload = {}, type = '
       outputSize: `${sizeInfo.width}x${sizeInfo.height}`,
       format: sizeInfo.label,
       logoApplied: Boolean(logoWhite || logoDark),
-      layout: layoutMode(payload, type),
+      layout: layoutMode(payload, type, sizeInfo.label),
       pillar: inferContentPillar(payload, type),
     },
   };

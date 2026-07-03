@@ -117,7 +117,8 @@ serve(async (req) => {
           video_prompt: safeString(result.video_prompt, undefined as unknown as string) || undefined,
           creative_brief: safeString(result.creative_brief || result.visual_idea, undefined as unknown as string) || undefined,
           master_prompt: safeString(result.master_prompt || result.prompt_used, safeString(job.input_json?.final_prompt || job.payload?.final_prompt)),
-          quality_score: Math.min(100, Math.max(0, Number(result.quality_score) || 90)),
+          // Score honesto: só o valor real vindo do motor; ausente fica null.
+          quality_score: Number(result.quality_score) ? Math.min(100, Math.max(0, Number(result.quality_score))) : null,
           metadata: {
             ...((previousMetadata && typeof previousMetadata === "object") ? previousMetadata as Record<string, unknown> : {}),
             creative_engine_v7: {
@@ -142,11 +143,25 @@ serve(async (req) => {
         }).eq("id", postId);
         await enqueueMediaJobsAfterContent(supabase, job, postId, result);
       } else if (type === "carousel_page") {
-        const { data: current } = await supabase.from("posts").select("carousel_media_urls").eq("id", postId).maybeSingle();
-        const urls = Array.isArray(current?.carousel_media_urls) ? current.carousel_media_urls : [];
+        const { data: current } = await supabase.from("posts").select("carousel_media_urls, metadata").eq("id", postId).maybeSingle();
         const page = Math.max(1, Number(job.input_json?.page || job.payload?.page || body.page || 1));
-        if (mediaUrl) urls[page - 1] = mediaUrl;
-        await supabase.from("posts").update({ carousel_media_urls: urls.filter(Boolean), media_url: urls.filter(Boolean)[0] || mediaUrl || null, status: "aguardando_revisao", error_message: null, updated_at: new Date().toISOString() }).eq("id", postId);
+        const pageCount = Math.max(1, Number(job.input_json?.page_count || job.input_json?.total_pages || job.payload?.page_count || 1));
+        // Slots por página em metadata: ordem estável mesmo se as páginas terminarem
+        // fora de sequência (retry/paralelismo); array compactado corrompia a ordem.
+        const currentMetadata = current?.metadata && typeof current.metadata === "object" ? current.metadata as Record<string, unknown> : {};
+        const slots = { ...((currentMetadata.carousel_page_urls && typeof currentMetadata.carousel_page_urls === "object") ? currentMetadata.carousel_page_urls as Record<string, string> : {}) };
+        if (mediaUrl) slots[String(page)] = mediaUrl;
+        const orderedUrls = Object.keys(slots).map(Number).sort((a, b) => a - b).map((key) => slots[String(key)]).filter(Boolean);
+        const complete = orderedUrls.length >= pageCount;
+        await supabase.from("posts").update({
+          carousel_media_urls: orderedUrls,
+          media_url: orderedUrls[0] || mediaUrl || null,
+          metadata: { ...currentMetadata, carousel_page_urls: slots },
+          // Só vai para revisão com todos os slides prontos.
+          status: complete ? "aguardando_revisao" : "em_producao",
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        }).eq("id", postId);
       } else if (type === "video") {
         const { data: currentPost } = await supabase.from("posts").select("metadata").eq("id", postId).maybeSingle();
         const currentMetadata = currentPost?.metadata && typeof currentPost.metadata === "object" ? currentPost.metadata as Record<string, unknown> : {};
@@ -185,7 +200,7 @@ serve(async (req) => {
           video_url: type === "video" ? mediaUrl || null : null,
           output_json: { ...result, mediaUrl, posterUrl, mime, type },
           prompt_used: safeString(job.input_json?.final_prompt || job.payload?.final_prompt),
-          quality_score: Number(result.quality_score) || 88,
+          quality_score: Number(result.quality_score) ? Math.min(100, Math.max(0, Number(result.quality_score))) : null,
           is_current: true,
         });
       }

@@ -78,7 +78,8 @@ function normalizeIdea(raw: Record<string, unknown>, index: number, format: stri
     channel: safeString(raw.channel, "Instagram"),
     format: safeString(raw.format, format),
     suggested_at: safeString(raw.suggested_at, suggestedAt),
-    predicted_score: Math.min(100, Math.max(0, Math.floor(numberValue(raw.predicted_score, 92)))),
+    // Score honesto: só o que a IA previu; sem valor inventado quando ausente.
+    predicted_score: numberValue(raw.predicted_score, 0) > 0 ? Math.min(100, Math.max(1, Math.floor(numberValue(raw.predicted_score, 0)))) : null,
     content_pillar: safeString(raw.content_pillar, "Venda consultiva"),
     why_this_post_matters: safeString(raw.why_this_post_matters, `Apoia percepção de valor da MYINC, reduz objeções e aumenta confiança comercial. Ângulo: ${angle}.`),
     metadata: {
@@ -91,28 +92,6 @@ function normalizeIdea(raw: Record<string, unknown>, index: number, format: stri
       reference_need: safeString(raw.reference_need, "usar referências aprovadas da marca quando disponíveis"),
     },
   };
-}
-
-function fallbackIdea(index: number, format: string, payload: Record<string, unknown>, suggestedAt: string) {
-  const pillarsText = String(payload.pillars || "Venda consultiva, autoridade técnica, arquitetura, localização, lifestyle, prova social");
-  const pillars = pillarsText.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
-  const pillar = pillars[index % Math.max(1, pillars.length)] || "Venda consultiva";
-  const brandName = safeString(payload.brandName, "MYINC");
-  return normalizeIdea({
-    title: `${pillar} MYINC`,
-    theme: `${pillar} aplicado ao desejo de morar melhor`,
-    headline: `${brandName}: decisão imobiliária com mais clareza e segurança`,
-    short_text: `Conteúdo consultivo sobre ${pillar.toLowerCase()}, conectando arquitetura, patrimônio, localização e percepção de valor.`,
-    hook: `Entenda como ${pillar.toLowerCase()} influencia sua decisão de compra.`,
-    angle: "Compra mais segura e posicionamento premium sem exageros",
-    pain_point: "O cliente quer diferenciar valor real de promessa superficial.",
-    cta: "Falar com consultor",
-    visual_direction: `Imagem premium realista de empreendimento residencial moderno, luz natural, composição clara, atmosfera sofisticada, foco em ${pillar.toLowerCase()}.`,
-    initial_prompt: `Criativo premium para ${format}, incorporadora ${brandName}, tema ${pillar}, arquitetura realista de alto padrão, luz natural, composição editorial sofisticada, espaço negativo elegante, sem texto na imagem, sem watermark, sem logo falso, sem poluição visual.`,
-    objective: safeString(payload.monthlyObjective, "Autoridade e conversão consultiva"),
-    content_pillar: pillar,
-    predicted_score: 90,
-  }, index, format, payload, suggestedAt);
 }
 
 function pickBrandId(payload: Record<string, unknown>) {
@@ -191,9 +170,9 @@ serve(async (req) => {
     const formatEntries = normalizeFormats(body.formats, exactTotal);
     const formatSequence = buildFormatSequence(formatEntries, exactTotal);
 
-    let ai: Record<string, unknown> = {};
-    try {
-      ai = await openAIJson([
+    // Sem fallback fabricado: se a IA falhar, o erro é devolvido honestamente
+    // e nenhum plano com ideias sintéticas é salvo.
+    const ai: Record<string, unknown> = await openAIJson([
         {
           role: "system",
           content: [
@@ -246,19 +225,20 @@ serve(async (req) => {
           }),
         },
       ], { temperature: 0.72, maxTokens: Math.min(14000, Math.max(3000, exactTotal * 900)), timeoutMs: 58000 });
-    } catch (error) {
-      ai = { strategy: "Fallback controlado após falha/timeout do provedor de IA.", provider_error: error instanceof Error ? error.message : String(error), ideas: [] };
-    }
 
     const rawIdeas = Array.isArray(ai.ideas) ? ai.ideas as Record<string, unknown>[] : [];
+    if (!rawIdeas.length) {
+      throw new Error("A IA não retornou nenhuma ideia válida. Nenhum plano foi salvo — tente gerar novamente.");
+    }
+    // Só ideias reais da IA entram no plano; se vierem menos que o pedido, o total é honesto.
+    const realTotal = Math.min(exactTotal, rawIdeas.length);
     const firstDay = new Date(Date.UTC(year, month - 1, 1, 12, 0, 0));
-    const normalizedIdeas = Array.from({ length: exactTotal }, (_, index) => {
+    const normalizedIdeas = Array.from({ length: realTotal }, (_, index) => {
       const format = formatSequence[index] || formatEntries[index % formatEntries.length]?.[0] || "Feed 1080x1350";
       const day = new Date(firstDay);
-      day.setUTCDate(1 + Math.floor(index * 28 / Math.max(1, exactTotal)));
+      day.setUTCDate(1 + Math.floor(index * 28 / Math.max(1, realTotal)));
       day.setUTCHours(index % 3 === 0 ? 12 : index % 3 === 1 ? 15 : 18, 0, 0, 0);
-      const source = rawIdeas[index];
-      return source ? normalizeIdea(source, index, format, body, day.toISOString()) : fallbackIdea(index, format, body, day.toISOString());
+      return normalizeIdea(rawIdeas[index], index, format, body, day.toISOString());
     });
 
     const { data: plan, error: planErr } = await supabase.from("monthly_plans").insert({
@@ -268,11 +248,11 @@ serve(async (req) => {
       objective: safeString(body.monthlyObjective, "Planejamento editorial mensal com IA"),
       month,
       year,
-      total_posts: exactTotal,
+      total_posts: normalizedIdeas.length,
       status: "gerado",
       strategy: safeString(ai.strategy, "Estratégia gerada por IA usando Cérebro MYINC."),
       prompt_used: JSON.stringify({ formats: Object.fromEntries(formatEntries), exactTotal, body, version: 'quality-planner-v6-4' }),
-      ai_response_json: { ...ai, normalized_count: exactTotal, provider_count: rawIdeas.length },
+      ai_response_json: { ...ai, normalized_count: normalizedIdeas.length, provider_count: rawIdeas.length },
       metadata: { requested_total_posts: exactTotal, format_distribution: Object.fromEntries(formatEntries), provider_count: rawIdeas.length, planner_version: 'quality-planner-v6-4' },
     }).select("*").single();
     if (planErr) throw new Error(`Falha ao salvar monthly_plans: ${readableEdgeError(planErr)}`);
@@ -313,7 +293,9 @@ serve(async (req) => {
       requestedTotal: exactTotal,
       providerCount: rawIdeas.length,
       normalizedCount: inserted?.length || rows.length,
-      message: `Geradas ${inserted?.length || rows.length} ideia(s) detalhadas conforme o total solicitado.`,
+      message: (inserted?.length || rows.length) < exactTotal
+        ? `A IA gerou ${inserted?.length || rows.length} de ${exactTotal} ideia(s) solicitadas — todas reais, nenhuma preenchida artificialmente. Gere novamente para completar.`
+        : `Geradas ${inserted?.length || rows.length} ideia(s) reais pela IA conforme o total solicitado.`,
     });
   } catch (error) {
     return err(req, error, 500);

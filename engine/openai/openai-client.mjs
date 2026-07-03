@@ -4,6 +4,35 @@ function withTimeout(ms = 120000) {
   return { controller, clear: () => clearTimeout(timer) };
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Repete chamadas à OpenAI em caso de rate limit (429) ou instabilidade (5xx/timeout).
+async function fetchOpenAIWithRetry(url, buildInit, { retries = 3, timeoutMs = 120000 } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const timeout = withTimeout(timeoutMs);
+    try {
+      const response = await fetch(url, { ...buildInit(), signal: timeout.controller.signal });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) return data;
+      const retryable = response.status === 429 || response.status >= 500;
+      lastError = new Error(`OpenAI HTTP ${response.status}: ${JSON.stringify(data).slice(0, 1200)}`);
+      if (!retryable || attempt === retries) throw lastError;
+    } catch (error) {
+      lastError = error;
+      const aborted = error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''));
+      const retryable = aborted || /HTTP (429|5\d\d)/.test(String(error?.message || '')) || /fetch failed|network|ECONNRESET|ETIMEDOUT/i.test(String(error?.message || ''));
+      if (!retryable || attempt === retries) throw error;
+    } finally {
+      timeout.clear();
+    }
+    await wait(Math.min(2000 * 2 ** attempt, 20000));
+  }
+  throw lastError;
+}
+
 function normalizeSize(size = '1024x1536') {
   const s = String(size || '').toLowerCase();
   if (s.includes('1536x1024') || s.includes('1200x630') || s.includes('horizontal') || s.includes('facebook')) return '1536x1024';
@@ -167,34 +196,12 @@ function normalizeContentResult(result, payload = {}, prompt = '') {
       'há respiro para leitura?',
     ],
     production_tier: result.production_tier || payload.production_tier || 'balanced-premium',
-    quality_score: Math.min(100, Math.max(72, Number(result.quality_score) || 93)),
+    // Score honesto: só o valor que a IA declarou, sem piso inventado; ausente vira null.
+    quality_score: Number(result.quality_score) ? Math.min(100, Math.max(0, Number(result.quality_score))) : null,
     ai_quality_notes: result.ai_quality_notes || 'Conteúdo normalizado pelo Creative Engine V7 para estratégia, direção visual, carrossel e render final.',
     brand_alignment: result.brand_alignment || profile.mantra || 'Alinhado ao posicionamento premium MYINC.',
     creative_engine_version: 'v7-final',
   };
-}
-
-function buildDeterministicContentFallback(prompt, payload = {}, reason = '') {
-  const post = payload.post || {};
-  const profile = payload.brand_profile || payload.profile || {};
-  const title = post.title || post.theme || 'MYINC: morar bem com confiança';
-  const headline = post.headline || title;
-  const cta = post.cta || 'Falar com consultor';
-  const benefit = profile.benefits || 'conforto, segurança, arquitetura contemporânea e valorização patrimonial';
-  const differentiator = profile.differentiators || 'projeto bem executado, comunicação clara e padrão premium';
-  return normalizeContentResult({
-    title,
-    headline,
-    caption: `${headline}\n\nNa MYINC, cada empreendimento é pensado para transformar a decisão imobiliária em uma escolha mais segura, clara e sofisticada. O foco está em ${benefit}.\n\nCom ${differentiator}, a marca traduz arquitetura e qualidade construtiva em experiência real de morar melhor.\n\n${cta}`,
-    short_text: `Conteúdo premium sobre ${post.theme || title}, conectando desejo, segurança e valor percebido para o público MYINC.`,
-    hashtags: ['MYINC', 'Imóveis', 'Arquitetura', 'AltoPadrão', 'MorarBem', 'Patrimônio', 'Incorporação'],
-    cta,
-    creative_brief: post.creative_brief || 'Direção visual premium: empreendimento moderno, luz natural, composição limpa, arquitetura sofisticada, atmosfera de confiança, sem texto embutido.',
-    image_prompt: post.image_prompt || 'Imagem premium realista de empreendimento residencial contemporâneo, fachada elegante, luz natural, materiais nobres, composição editorial, alto padrão, sem texto na imagem, sem watermark, sem logo falso.',
-    video_prompt: post.video_prompt || 'Vídeo vertical premium para Reels da MYINC: cenas de fachada, detalhes de acabamento, lifestyle sofisticado e transições suaves; som elegante e cinematográfico discreto.',
-    quality_score: 88,
-    ai_quality_notes: `Fallback seguro aplicado porque o JSON da IA veio inválido ou truncado. ${reason}`.trim(),
-  }, payload, prompt);
 }
 
 function buildContentPrompt(prompt, payload = {}) {
@@ -296,13 +303,29 @@ function safeSlug(value = 'ref') {
   return String(value || 'ref').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'ref';
 }
 
+function isHumanizedContext(payload = {}) {
+  const post = payload.post || {};
+  const text = `${post.title || ''} ${post.theme || ''} ${post.objective || ''} ${post.creative_brief || ''} ${payload.content_pillar || ''}`.toLowerCase();
+  return /autoridade|bastidor|depoimento|prova social|atendimento|equipe|time|consultor|humaniz|lifestyle|especialista|apresenta/.test(text);
+}
+
+function referenceGroup(item) {
+  const role = String(item.role || '').toLowerCase();
+  const tags = item.tags.map((tag) => tag.toLowerCase()).join(' ');
+  if (/person|pessoal|retrato|rosto|foto/.test(role) || /foto-pessoal|retrato|rosto|person/.test(tags)) return 'person';
+  if (/architecture|arquitet|empreendimento|obra|fachada/.test(role)) return 'architecture';
+  if (role.includes('template')) return 'template';
+  if (role.includes('style')) return 'style';
+  return 'other';
+}
+
 function normalizeReferenceAssets(payload = {}, max = 4) {
   const raw = Array.isArray(payload.reference_assets)
     ? payload.reference_assets
     : Array.isArray(payload.referenceAssets)
       ? payload.referenceAssets
       : [];
-  return raw
+  const scored = raw
     .map((item) => (item && typeof item === 'object' ? item : null))
     .filter(Boolean)
     .map((item) => ({
@@ -318,15 +341,34 @@ function normalizeReferenceAssets(payload = {}, max = 4) {
     .filter((item) => !String(item.role || '').toLowerCase().includes('logo'))
     .map((item) => ({
       ...item,
+      group: referenceGroup(item),
       score:
-        /person|pessoal|retrato|rosto|foto/.test(String(item.role || '').toLowerCase()) || item.tags.some((tag) => /foto-pessoal|retrato|rosto|person/.test(tag.toLowerCase())) ? 100 :
-        /architecture|arquitet|empreendimento|obra|fachada/.test(String(item.role || '').toLowerCase()) ? 90 :
-        String(item.role || '').toLowerCase().includes('template') ? 80 :
-        String(item.role || '').toLowerCase().includes('style') ? 70 :
+        referenceGroup(item) === 'person' ? 100 :
+        referenceGroup(item) === 'architecture' ? 90 :
+        referenceGroup(item) === 'template' ? 80 :
+        referenceGroup(item) === 'style' ? 70 :
         50,
     }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, max);
+    .sort((a, b) => b.score - a.score);
+
+  // Mínimo viável: a melhor referência de cada categoria já orienta a geração;
+  // enviar duplicatas só aumenta custo/latência sem ganho visual.
+  // Foto pessoal entra apenas quando o contexto do post é humanizado.
+  const humanized = isHumanizedContext(payload);
+  const effectiveMax = humanized ? max : Math.min(max, 3);
+  const picks = [];
+  const seenGroups = new Set();
+  for (const item of scored) {
+    if (picks.length >= effectiveMax) break;
+    if (item.group === 'person' && !humanized) continue;
+    if (seenGroups.has(item.group)) continue;
+    seenGroups.add(item.group);
+    picks.push(item);
+  }
+  // Sobrando espaço, só uma 2ª foto de arquitetura agrega (ângulo/acabamento extra do empreendimento).
+  const extraArchitecture = scored.find((item) => item.group === 'architecture' && !picks.includes(item));
+  if (extraArchitecture && picks.length < effectiveMax) picks.push(extraArchitecture);
+  return picks.map(({ group: _group, ...item }) => item);
 }
 
 function buildReferenceInstruction(references = []) {
@@ -364,46 +406,51 @@ export class OpenAIClient {
   constructor(config) { this.config = config; }
 
   async generateContentJson(prompt, payload = {}) {
-    const timeout = withTimeout(90000);
     const contentPayload = buildContentPrompt(prompt, payload);
+    const body = JSON.stringify({
+      model: this.config.textModel,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You are MYINC Creative Brain V9.1: senior content strategist, premium real-estate creative director and social media lead.',
+            'Think in English for precision, but every user-facing copy field must be written in Brazilian Portuguese.',
+            'Create useful, specific content that drives curiosity, authority, saves, qualified followers and brand value; never deliver empty institutional copy.',
+            'Every caption must open with a scroll-stopping first line (hook), deliver one concrete idea the reader can keep, and close with a natural CTA. Avoid clichés like "sonho da casa própria".',
+            'Return only valid JSON, no markdown, no root array, no comments. Hashtags must be a valid JSON array.',
+            'Image prompts must be written mostly in English for better generation quality: describe subject, environment, composition, camera angle, lens feel, natural lighting, materials and mood in concrete visual language, while explicitly saying that final overlay texts are Portuguese and rendered later by the app.',
+            'Protect brand assets: never ask the image model to invent or redraw the MYINC logo. Use person references only when contextually appropriate and respectful.',
+          ].join(' '),
+        },
+        { role: 'user', content: safeJsonStringify(contentPayload, 30000) },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.62,
+      max_tokens: 3200,
+    });
+    let text = '';
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${this.config.openaiApiKey}`, 'Content-Type': 'application/json' },
-        signal: timeout.controller.signal,
-        body: JSON.stringify({
-          model: this.config.textModel,
-          messages: [
-            {
-              role: 'system',
-              content: [
-                'You are MYINC Creative Brain V9.1: senior content strategist, premium real-estate creative director and social media lead.',
-                'Think in English for precision, but every user-facing copy field must be written in Brazilian Portuguese.',
-                'Create useful, specific content that drives curiosity, authority, saves, qualified followers and brand value; never deliver empty institutional copy.',
-                'Return only valid JSON, no markdown, no root array, no comments. Hashtags must be a valid JSON array.',
-                'Image prompts should be written mostly in English for better generation quality, while explicitly saying that final overlay texts are Portuguese and rendered later by the app.',
-                'Protect brand assets: never ask the image model to invent or redraw the MYINC logo. Use person references only when contextually appropriate and respectful.',
-              ].join(' '),
-            },
-            { role: 'user', content: safeJsonStringify(contentPayload, 30000) },
-          ],
-          response_format: { type: 'json_object' },
-          temperature: 0.62,
-          max_tokens: 1100,
+      const data = await fetchOpenAIWithRetry(
+        'https://api.openai.com/v1/chat/completions',
+        () => ({
+          method: 'POST',
+          headers: { Authorization: `Bearer ${this.config.openaiApiKey}`, 'Content-Type': 'application/json' },
+          body,
         }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(`OpenAI texto falhou: ${JSON.stringify(data)}`);
-      const text = data?.choices?.[0]?.message?.content;
+        { retries: 3, timeoutMs: 90000 },
+      );
+      text = data?.choices?.[0]?.message?.content;
       if (!text) throw new Error('OpenAI texto não retornou conteúdo.');
-      try {
-        return normalizeContentResult(extractJsonObject(text), payload, prompt);
-      } catch (parseError) {
-        throw new Error(`JSON de conteúdo inválido retornado pela IA: ${parseError.message}`);
-      }
     } catch (error) {
       throw new Error(`Falha ao gerar conteúdo final com IA: ${error.message}`);
-    } finally { timeout.clear(); }
+    }
+    try {
+      return normalizeContentResult(extractJsonObject(text), payload, prompt);
+    } catch (parseError) {
+      // Sem fallback fabricado: conteúdo artificial é proibido. O job falha
+      // honestamente e pode ser retentado pela fila.
+      throw new Error(`JSON de conteúdo inválido retornado pela IA (nada foi salvo): ${parseError.message}`);
+    }
   }
 
   async generateImage(prompt, payload = {}) {
@@ -415,64 +462,10 @@ export class OpenAIClient {
     const referenceInstruction = buildReferenceInstruction(references);
     const finalPrompt = referenceInstruction ? `${referenceInstruction}\n\nPROMPT PRINCIPAL:\n${prompt}` : prompt;
 
-    const timeout = withTimeout(180000);
-    try {
-      if (references.length && String(model).startsWith('gpt-image')) {
-        const form = new FormData();
-        form.append('model', model);
-        form.append('prompt', finalPrompt);
-        form.append('size', size);
-        form.append('quality', quality);
-        form.append('output_format', outputFormat);
-        const blobs = [];
-        for (let i = 0; i < references.length; i += 1) {
-          blobs.push(await fetchReferenceBlob(references[i], i));
-        }
-        blobs.forEach((item) => form.append('image[]', item.blob, item.fileName));
-        const response = await fetch('https://api.openai.com/v1/images/edits', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${this.config.openaiApiKey}` },
-          signal: timeout.controller.signal,
-          body: form,
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(`OpenAI imagem+referência falhou: ${JSON.stringify(data)}`);
-        const item = data?.data?.[0] || {};
-        const b64 = item.b64_json || item.base64;
-        if (!b64 && !item.url) throw new Error(`OpenAI imagem com referências retornou sem b64/url: ${JSON.stringify(data)}`);
-        return {
-          base64: b64,
-          url: item.url,
-          mime: `image/${outputFormat === 'jpeg' ? 'jpeg' : outputFormat}`,
-          ext: outputFormat === 'jpeg' ? 'jpg' : outputFormat,
-          raw: data,
-          usedReferences: references,
-        };
-      }
-
-      const body = {
-        model,
-        prompt: finalPrompt,
-        n: 1,
-        size,
-        quality,
-      };
-      if (String(model).startsWith('gpt-image')) {
-        body.output_format = outputFormat;
-      } else {
-        body.response_format = 'b64_json';
-      }
-      const response = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${this.config.openaiApiKey}`, 'Content-Type': 'application/json' },
-        signal: timeout.controller.signal,
-        body: JSON.stringify(body),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(`OpenAI imagem falhou: ${JSON.stringify(data)}`);
+    const toArtifact = (data, label) => {
       const item = data?.data?.[0] || {};
       const b64 = item.b64_json || item.base64;
-      if (!b64 && !item.url) throw new Error(`OpenAI imagem retornou sem b64/url: ${JSON.stringify(data)}`);
+      if (!b64 && !item.url) throw new Error(`${label} retornou sem b64/url: ${JSON.stringify(data).slice(0, 1200)}`);
       return {
         base64: b64,
         url: item.url,
@@ -481,6 +474,53 @@ export class OpenAIClient {
         raw: data,
         usedReferences: references,
       };
-    } finally { timeout.clear(); }
+    };
+
+    if (references.length && String(model).startsWith('gpt-image')) {
+      const blobs = await Promise.all(references.map((reference, index) => fetchReferenceBlob(reference, index)));
+      const data = await fetchOpenAIWithRetry(
+        'https://api.openai.com/v1/images/edits',
+        () => {
+          // FormData novo a cada tentativa: streams de multipart não podem ser reenviados.
+          const form = new FormData();
+          form.append('model', model);
+          form.append('prompt', finalPrompt);
+          form.append('size', size);
+          form.append('quality', quality);
+          form.append('output_format', outputFormat);
+          blobs.forEach((item) => form.append('image[]', item.blob, item.fileName));
+          return {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${this.config.openaiApiKey}` },
+            body: form,
+          };
+        },
+        { retries: 2, timeoutMs: 180000 },
+      );
+      return toArtifact(data, 'OpenAI imagem+referência');
+    }
+
+    const body = {
+      model,
+      prompt: finalPrompt,
+      n: 1,
+      size,
+      quality,
+    };
+    if (String(model).startsWith('gpt-image')) {
+      body.output_format = outputFormat;
+    } else {
+      body.response_format = 'b64_json';
+    }
+    const data = await fetchOpenAIWithRetry(
+      'https://api.openai.com/v1/images/generations',
+      () => ({
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.config.openaiApiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      { retries: 2, timeoutMs: 180000 },
+    );
+    return toArtifact(data, 'OpenAI imagem');
   }
 }

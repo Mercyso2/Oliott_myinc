@@ -13,29 +13,6 @@ function normalizeHashtags(value: unknown) {
   return raw.map((x) => String(x || "").trim().replace(/^#/, "")).filter(Boolean).slice(0, 14).map((x) => `#${x}`);
 }
 
-function fallbackImprove(post: Record<string, unknown>, mode: string) {
-  const title = asText(post.title, asText(post.theme, "Conteúdo MYINC"));
-  const currentCaption = asText(post.caption, asText(post.short_text, ""));
-  const cta = asText(post.cta, "Fale com a MYINC");
-  return {
-    headline: asText(post.headline, title),
-    caption: `${currentCaption}\n\nAjuste ${mode}: transformar a mensagem em conteúdo mais claro, premium e útil, com foco em arquitetura, confiança, localização e valor patrimonial.\n\n${cta}`.trim(),
-    short_text: `Versão ${mode} com mais clareza, valor percebido e direção visual premium.`,
-    hashtags: normalizeHashtags(post.hashtags || ["MYINC", "Arquitetura", "Imoveis", "AltoPadrao"]),
-    cta,
-    content_pillar: mode,
-    creative_brief: `Refinar para modo ${mode}: visual premium, camadas, profundidade, espaço negativo, base sem texto/logo e render final com identidade real MYINC.`,
-    image_prompt: `Base visual premium para modo ${mode}: arquitetura contemporânea, luz natural, materiais nobres, profundidade editorial, sem texto, sem logo, sem watermark, com espaço negativo para render final.`,
-    visual_recipe: {
-      family: mode,
-      layout: "render final com logo real, headline forte, subtítulo curto, CTA e acento de marca",
-      depth: "camadas arquitetônicas, textura e luz natural",
-      brand_application: "logo real aplicado pelo app",
-    },
-    quality_score: 91,
-  };
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return okOptions(req);
   try {
@@ -49,10 +26,11 @@ Deno.serve(async (req) => {
     if (error) throw error;
     const { data: profile } = await supabase.from("brand_profiles").select("*").eq("brand_id", post.brand_id).maybeSingle();
 
-    let content = fallbackImprove(post, mode);
-    if ((Deno.env.get("OPENAI_API_KEY") || "").trim()) {
-      try {
-        const ai = await openAIJson([
+    if (!(Deno.env.get("OPENAI_API_KEY") || "").trim()) {
+      throw new Error("OPENAI_API_KEY não configurada. Refinamento artificial é proibido — configure a chave para refinar com IA real.");
+    }
+    // Sem fallback fabricado: se a IA falhar, o erro sobe e o post não é alterado.
+    const ai = await openAIJson([
           {
             role: "system",
             content: "Você é o Creative Engine V7 da MYINC. Reescreva e refine o post para ficar mais premium, útil, não genérico e com direção visual pronta para render final com logo real. Responda somente JSON válido.",
@@ -77,10 +55,11 @@ Deno.serve(async (req) => {
             }),
           },
         ], { maxTokens: 2600, temperature: 0.58, timeoutMs: 45000 });
-        content = { ...content, ...(ai as Record<string, unknown>) } as typeof content;
-      } catch (_error) {
-        // fallback acima mantém fluxo estável
-      }
+
+    const content = ai as Record<string, unknown>;
+    const caption = asText(content.caption);
+    if (!caption) {
+      throw new Error("A IA retornou refinamento incompleto (sem legenda). O post não foi alterado — tente novamente.");
     }
 
     const previousMetadata = post.metadata && typeof post.metadata === "object" ? post.metadata as Record<string, unknown> : {};
@@ -97,14 +76,14 @@ Deno.serve(async (req) => {
 
     const patch = {
       status: "aguardando_revisao",
-      headline: content.headline,
-      caption: content.caption,
-      short_text: content.short_text,
+      headline: asText(content.headline, asText(post.headline)),
+      caption,
+      short_text: asText(content.short_text, asText(post.short_text)),
       hashtags: normalizeHashtags(content.hashtags).join(" "),
-      cta: content.cta,
-      creative_brief: content.creative_brief,
-      image_prompt: content.image_prompt,
-      quality_score: Math.max(Number(post.quality_score ?? 0), Number(content.quality_score) || 90),
+      cta: asText(content.cta, asText(post.cta)),
+      creative_brief: asText(content.creative_brief, asText(post.creative_brief)),
+      image_prompt: asText(content.image_prompt, asText(post.image_prompt)),
+      quality_score: Number(content.quality_score) ? Math.min(100, Math.max(0, Number(content.quality_score))) : post.quality_score ?? null,
       metadata,
       updated_at: new Date().toISOString(),
       error_message: null,

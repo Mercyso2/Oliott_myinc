@@ -1,8 +1,15 @@
 import { generateVideo } from './video-processor.mjs';
 import { renderFinalDesignV2 } from '../renderers/design-renderer-v2.mjs';
+import { checkImageQuality } from '../quality/quality-checker.mjs';
 
 function inferMediaSize(job, payload) {
-  return payload.size || payload.output_size || job.input_json?.size || '1024x1536';
+  const explicit = payload.size || payload.output_size || job.input_json?.size;
+  if (explicit) return explicit;
+  // Sem size explícito, o formato do post decide a base OpenAI correta.
+  const format = String(payload?.post?.format || payload.format || '').toLowerCase();
+  if (/quadrado|1080x1080/.test(format)) return '1024x1024';
+  if (/facebook|1200x630|horizontal/.test(format)) return '1536x1024';
+  return '1024x1536';
 }
 
 function asText(value, fallback = '') {
@@ -35,7 +42,22 @@ function referenceSummary(payload = {}) {
   }).join('\n');
 }
 
-function buildImageBasePrompt(basePrompt, payload, type) {
+function targetFormatSpec(payload = {}, size = '') {
+  const post = getPost(payload);
+  const raw = `${payload.final_size || ''} ${payload.output_size || ''} ${size || payload.size || ''} ${post.format || payload.format || ''}`.toLowerCase();
+  if (/story|stories|reels|1080x1920|720x1280/.test(raw)) {
+    return 'Final delivery: 1080x1920 (9:16 vertical story/reels), center-cropped from the generated image. Compose for a tall vertical frame: strong vertical lines, key subject centered, generous headroom and foreground.';
+  }
+  if (/quadrado|1080x1080|1024x1024/.test(raw)) {
+    return 'Final delivery: 1080x1080 (1:1 square feed), center-cropped from the generated image. Compose balanced and centered: key subject fully inside the middle 80% of the frame.';
+  }
+  if (/facebook|1200x630|1536x1024|horizontal/.test(raw)) {
+    return 'Final delivery: 1200x630 (1.91:1 wide horizontal), center-cropped from the generated image. Compose wide and horizon-led: key subject on the right two thirds, left side calmer for the text panel.';
+  }
+  return 'Final delivery: 1080x1350 (4:5 portrait feed), center-cropped from the generated image. Compose with the key subject in the upper two thirds; keep the lower third calmer for the overlay panel.';
+}
+
+function buildImageBasePrompt(basePrompt, payload, type, size = '') {
   const post = getPost(payload);
   const pillar = inferPillar(payload);
   const mode = type === 'carousel_page' ? 'carousel slide background' : 'final post background';
@@ -54,6 +76,7 @@ function buildImageBasePrompt(basePrompt, payload, type) {
     'MYINC CREATIVE ENGINE V9.1 — PREMIUM BACKGROUND IMAGE',
     'Write and reason in English for image quality, but all final overlay text will be Portuguese and applied later by the MYINC renderer.',
     `Mode: ${mode}.`,
+    targetFormatSpec(payload, size),
     `Strategic pillar: ${pillar}.`,
     `Theme in Portuguese: ${asText(post.theme || post.title, 'conteúdo premium MYINC')}.`,
     `Objective in Portuguese: ${asText(post.objective, 'gerar autoridade, desejo e confiança')}.`,
@@ -62,6 +85,7 @@ function buildImageBasePrompt(basePrompt, payload, type) {
     page,
     'Generate ONLY the premium photographic/design background. Do not place text, captions, fake logos, watermarks, signs, UI, labels or typography in the image.',
     'Composition rules: light premium mood, Brazilian contemporary real estate, natural daylight, noble materials, clean editorial art direction, realistic depth, agency-level finish, no generic stock-photo look.',
+    'Photographic direction: architectural photography style, full-frame camera feel, 24-35mm lens for exteriors or 50mm for details, straight verticals (no keystone distortion), golden-hour or soft overcast daylight, gentle shadows, physically accurate reflections on glass and stone, true-to-life color grading with warm neutrals.',
     'Quality bar: the base image must look like a premium real-estate campaign, with believable architecture, intentional art direction, refined textures, natural light and enough negative space for a clean editorial layout.',
     'Invisible safe margins: keep the bottom 18% clean for the real MYINC logo and CTA; keep the central-lower area calm for Portuguese overlay text; do not put faces, hands, important architecture details or high-contrast objects under those zones.',
     'Layering: foreground texture/material/lifestyle detail, midground architecture/environment, background with soft light and depth. Leave negative space for final design.',
@@ -152,11 +176,21 @@ export async function processJob(job, openai) {
     };
   }
 
-  const imageBasePrompt = buildImageBasePrompt(basePrompt, payload, type);
-  const baseArtifact = await openai.generateImage(imageBasePrompt, payload);
+  const imageBasePrompt = buildImageBasePrompt(basePrompt, payload, type, size);
+  const baseArtifact = await openai.generateImage(imageBasePrompt, { ...payload, size });
   const rendered = await renderFinalDesignV2({ baseArtifact, payload, type });
   const artifact = rendered.artifact || baseArtifact;
   const renderedOk = Boolean(rendered.details?.rendered);
+
+  const quality = await checkImageQuality({
+    artifact,
+    expectedSize: rendered.details?.outputSize || '',
+    logoApplied: renderedOk ? Boolean(rendered.details?.logoApplied) : null,
+    rendered: renderedOk,
+  });
+  if (!quality.ok) {
+    throw new Error(`Imagem reprovada na validação de qualidade: ${quality.notes.join(' | ')}`);
+  }
 
   return {
     type,
@@ -166,7 +200,8 @@ export async function processJob(job, openai) {
       media_kind: renderedOk ? 'final_designed_image' : 'base_image_fallback',
       prompt_used: imageBasePrompt,
       base_prompt_used: basePrompt,
-      quality_score: renderedOk ? 94 : 86,
+      quality_score: quality.score,
+      quality_report: { notes: quality.notes, checks: quality.checks },
       used_references: baseArtifact.usedReferences || [],
       final_render: rendered.details,
       creative_engine_version: 'v7-final',

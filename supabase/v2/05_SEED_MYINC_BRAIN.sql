@@ -1,6 +1,6 @@
 -- V2 05 - Seed idempotente MYINC.
 insert into public.app_users(email, full_name, role, status)
-values ('m2pinturaslondrina@gmail.com', 'Rodrigo Carvalho Santos', 'admin', 'active')
+values ('m2pinturaslondrina@gmail.com', 'Mauricio', 'admin', 'active')
 on conflict (email) do update set full_name=excluded.full_name, role=excluded.role, status='active';
 
 insert into public.brands(owner_user_id, name, public_name, status)

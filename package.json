@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "vite dev",
     "dev:host": "vite dev --host 0.0.0.0",
-    "build": "vite build && node scripts/ensure-desktop-index.mjs",
+    "build": "vite build",
+    "build:desktop": "vite build && node scripts/ensure-desktop-index.mjs",
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "preview:host": "vite preview --host 0.0.0.0 --port 4173",
@@ -27,8 +28,8 @@
     "local:check": "node --check server/local-api.mjs && npm run typecheck && npm run build",
     "local:backup-dir": "node -e \"console.log(require('path').resolve('data/backups'))\"",
     "desktop:dev": "npm run local",
-    "desktop:build": "npm run build && npx electron-builder --win nsis --x64",
-    "desktop:pack": "npm run build && node scripts/package-client.mjs",
+    "desktop:build": "npm run build:desktop && npx electron-builder --win nsis --x64",
+    "desktop:pack": "npm run build:desktop && node scripts/package-client.mjs",
     "desktop:setup": "npm install -D electron electron-builder",
     "verify:server": "node --check server/local-api.mjs",
     "web:dev": "vite dev",
@@ -37,13 +38,13 @@
     "engine:check": "node --check engine/runtime/main-loop.mjs && node --check engine/processors/job-processor.mjs && node --check engine/renderers/design-renderer-v2.mjs && node --check engine/openai/openai-client.mjs && node --check engine/quality/quality-checker.mjs",
     "test:v2": "node tests/v2-frontend-base-restored.test.mjs && node tests/v2-no-heavy-vercel-worker.test.mjs && node tests/v2-no-simplified-frontend.test.mjs && node tests/v2-edge-contract.test.mjs && node tests/v2-engine-contract.test.mjs && node tests/v2-sql-contract.test.mjs && node tests/v2-no-secret-leak.test.mjs && node --check engine/runtime/main-loop.mjs",
     "v2:verify": "npm run typecheck && npm run build && npm run test:v2",
-    "desktop:v2:dev": "npm run build && electron .",
-    "desktop:v2:build": "npm run build && npx electron-builder --win nsis --x64",
+    "desktop:v2:dev": "npm run build:desktop && electron .",
+    "desktop:v2:build": "npm run build:desktop && npx electron-builder --win nsis --x64",
     "v6:verify": "npm run typecheck && node scripts/verify-v6-contracts.mjs && npm run test:v2 && npm run build",
     "deps:clean": "node -e \"const fs=require('fs'); for (const p of ['node_modules','package-lock.json']) fs.rmSync(p,{recursive:true,force:true}); console.log('Dependencias antigas removidas. Rode npm install.')\"",
     "deps:install": "npm install",
     "creative:v7:check": "npm run engine:check && node --check electron/main.cjs && node --check electron/engine-process.cjs && node --check electron/tray.cjs && node scripts/verify-creative-journey.mjs",
-    "client:package": "npm run build && npm run creative:v7:check && node scripts/package-client.mjs"
+    "client:package": "npm run build:desktop && npm run creative:v7:check && node scripts/package-client.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
